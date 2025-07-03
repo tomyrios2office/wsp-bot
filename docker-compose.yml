@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-bot
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - PUPPETEER_HEADLESS=true
+      - PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-accelerated-2d-canvas,--no-first-run,--no-zygote,--disable-gpu
+      - LOG_LEVEL=info
+      - RATE_LIMIT_WINDOW=60000
+      - RATE_LIMIT_MAX_REQUESTS=100
+      - MESSAGE_MAX_LENGTH=4096
+      - RECONNECT_INTERVAL=5000
+      - MAX_RECONNECT_ATTEMPTS=10
+      - WEBHOOK_TIMEOUT=10000
+      - WEBHOOK_RETRY_ATTEMPTS=3
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - whatsapp-sessions:/app/.wwebjs_auth
+    networks:
+      - whatsapp-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  whatsapp-sessions:
+    driver: local
+
+networks:
+  whatsapp-network:
+    driver: bridge

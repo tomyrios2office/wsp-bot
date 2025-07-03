@@ -19,9 +19,16 @@ const config = {
     environment: process.env.NODE_ENV || "development",
   },
 
+  // Configuración Regional
+  regional: {
+    countryCode: process.env.COUNTRY_CODE || "54",
+    defaultCountry: "AR",
+  },
+
   // Configuración de Logs
   logging: {
     level: process.env.LOG_LEVEL || "info",
+    format: "combined",
   },
 
   // Configuración de WhatsApp Web
@@ -47,6 +54,8 @@ const config = {
       maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
     },
     messageMaxLength: parseInt(process.env.MESSAGE_MAX_LENGTH) || 4096,
+    allowedFileTypes: ["image", "audio", "document", "video"],
+    maxFileSize: 16 * 1024 * 1024, // 16MB
   },
 
   // Configuración de Reconexión
@@ -57,14 +66,26 @@ const config = {
 
   // Configuración de Mensajes
   messages: {
+    welcome: "¡Hola! Soy un bot de WhatsApp. ¿En qué puedo ayudarte?",
     error: "Lo siento, ha ocurrido un error. Por favor, intenta de nuevo.",
     invalidNumber: "El número de teléfono proporcionado no es válido.",
     messageTooLong: "El mensaje es demasiado largo. Máximo 4096 caracteres.",
+    rateLimitExceeded:
+      "Has enviado demasiados mensajes. Por favor, espera un momento.",
   },
 
   // Configuración de Validación
   validation: {
     phoneNumberPattern: /^(\+?54)?9?1[1-9]\d{6,9}$/,
+    messageTypes: [
+      "chat",
+      "image",
+      "audio",
+      "document",
+      "video",
+      "location",
+      "contact",
+    ],
   },
 };
 

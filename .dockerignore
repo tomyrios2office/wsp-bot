@@ -1,0 +1,46 @@
+# Dependencias
+node_modules
+npm-debug.log*
+
+# Logs
+logs
+*.log
+
+# Archivos de entorno
+.env
+.env.local
+.env.production
+
+# Archivos de desarrollo
+.git
+.gitignore
+README.md
+Dockerfile
+.dockerignore
+
+# Archivos temporales
+.tmp
+.temp
+
+# Archivos de sesión de WhatsApp
+.wwebjs_auth
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Archivos de test
+test
+tests
+*.test.js
+*.spec.js
+
+# Archivos de documentación
+docs
+*.md 
