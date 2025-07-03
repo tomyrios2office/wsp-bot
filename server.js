@@ -1,10 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
+const winston = require("winston");
 const config = require("./config");
 const WhatsAppBot = require("./bot");
-const PhoneValidator = require("./utils/phoneValidator");
-const MessageFormatter = require("./utils/messageFormatter");
 const qrcode = require("qrcode");
 
 /**
@@ -13,41 +12,50 @@ const qrcode = require("qrcode");
 class WhatsAppServer {
   constructor() {
     this.app = express();
+    this.logger = this.setupLogger();
     this.setupMiddleware();
     this.setupRoutes();
     this.bot = new WhatsAppBot();
   }
 
   /**
-   * Log simple sin Winston para reducir dependencias
+   * Configura el sistema de logging
    */
-  log(level, message, data = {}) {
-    const timestamp = new Date().toISOString();
-    const logData = {
-      timestamp,
-      level,
-      service: "whatsapp-api",
-      message,
-      ...data,
-    };
-
-    if (level === "error") {
-      console.error(JSON.stringify(logData));
-    } else if (level === "warn") {
-      console.warn(JSON.stringify(logData));
-    } else {
-      console.log(JSON.stringify(logData));
-    }
+  setupLogger() {
+    return winston.createLogger({
+      level: config.logging.level,
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.errors({ stack: true }),
+        winston.format.json()
+      ),
+      defaultMeta: { service: "whatsapp-api" },
+      transports: [
+        new winston.transports.File({ filename: "logs/api-combined.log" }),
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.simple()
+          ),
+        }),
+      ],
+    });
   }
 
   /**
    * Configura middleware de Express
    */
   setupMiddleware() {
-    // CORS simplificado
-    this.app.use(cors());
+    this.app.use(
+      cors({
+        origin: process.env.ALLOWED_ORIGINS
+          ? process.env.ALLOWED_ORIGINS.split(",")
+          : "*",
+        methods: ["GET", "POST", "PUT", "DELETE"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+      })
+    );
 
-    // Rate limiting
     const limiter = rateLimit({
       windowMs: config.security.rateLimit.windowMs,
       max: config.security.rateLimit.maxRequests,
@@ -60,13 +68,11 @@ class WhatsAppServer {
     });
     this.app.use(limiter);
 
-    // Body parser
     this.app.use(express.json({ limit: "10mb" }));
     this.app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-    // Logging middleware simplificado
     this.app.use((req, res, next) => {
-      this.log("info", `${req.method} ${req.path}`, {
+      this.logger.info(`${req.method} ${req.path}`, {
         ip: req.ip,
         userAgent: req.get("User-Agent"),
       });
@@ -78,7 +84,6 @@ class WhatsAppServer {
    * Configura las rutas de la API
    */
   setupRoutes() {
-    // Health check
     this.app.get("/health", (req, res) => {
       res.json({
         status: "ok",
@@ -87,18 +92,12 @@ class WhatsAppServer {
       });
     });
 
-    // Estado del bot
     this.app.get("/status", (req, res) => {
       try {
         const status = this.bot.getStatus();
-        res.json({
-          success: true,
-          data: status,
-        });
+        res.json({ success: true, data: status });
       } catch (error) {
-        this.log("error", "Error obteniendo estado del bot:", {
-          error: error.message,
-        });
+        this.logger.error("Error obteniendo estado del bot:", error);
         res.status(500).json({
           success: false,
           error: "Error interno del servidor",
@@ -106,66 +105,43 @@ class WhatsAppServer {
       }
     });
 
-    // Enviar mensaje individual
     this.app.post("/send-message", async (req, res) => {
       try {
         const { to, message } = req.body;
 
-        this.log("info", "Recibida solicitud de envío de mensaje:", {
-          to,
-          messageLength: message?.length,
-        });
-
-        // Validar parámetros
         if (!to || !message) {
-          this.log("warn", "Parámetros faltantes en solicitud");
           return res.status(400).json({
             success: false,
             error: 'Los parámetros "to" y "message" son requeridos',
           });
         }
 
-        // Validar número de teléfono
-        if (!PhoneValidator.isValidPhoneNumber(to)) {
-          this.log("warn", "Número de teléfono inválido:", { number: to });
+        if (!this.isValidPhoneNumber(to)) {
           return res.status(400).json({
             success: false,
             error: config.messages.invalidNumber,
           });
         }
 
-        // Validar longitud del mensaje
         if (message.length > config.security.messageMaxLength) {
-          this.log("warn", "Mensaje demasiado largo");
           return res.status(400).json({
             success: false,
             error: config.messages.messageTooLong,
           });
         }
 
-        // Verificar estado del bot
         const status = this.bot.getStatus();
         if (!status.isConnected) {
-          this.log("error", "Bot no conectado al intentar enviar mensaje");
           return res.status(503).json({
             success: false,
             error: "El bot no está conectado. Por favor, intenta más tarde.",
           });
         }
 
-        this.log("info", "Enviando mensaje a WhatsApp...");
-
-        // Enviar mensaje
         const result = await this.bot.sendMessage(to, message);
-
-        this.log("info", "Mensaje enviado exitosamente:", result);
-
-        res.json({
-          success: true,
-          data: result,
-        });
+        res.json({ success: true, data: result });
       } catch (error) {
-        this.log("error", "Error enviando mensaje:", { error: error.message });
+        this.logger.error("Error enviando mensaje:", error);
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -173,12 +149,10 @@ class WhatsAppServer {
       }
     });
 
-    // Responder a mensaje específico
     this.app.post("/send-response", async (req, res) => {
       try {
         const { to, message, replyTo } = req.body;
 
-        // Validar parámetros
         if (!to || !message) {
           return res.status(400).json({
             success: false,
@@ -186,48 +160,25 @@ class WhatsAppServer {
           });
         }
 
-        // Validar número de teléfono
-        if (!PhoneValidator.isValidPhoneNumber(to)) {
+        if (!this.isValidPhoneNumber(to)) {
           return res.status(400).json({
             success: false,
             error: config.messages.invalidNumber,
           });
         }
 
-        // Validar longitud del mensaje
-        if (message.length > config.security.messageMaxLength) {
-          return res.status(400).json({
+        const status = this.bot.getStatus();
+        if (!status.isConnected) {
+          return res.status(503).json({
             success: false,
-            error: config.messages.messageTooLong,
+            error: "El bot no está conectado. Por favor, intenta más tarde.",
           });
         }
 
-        // Formatear número para WhatsApp
-        const whatsappNumber = PhoneValidator.toWhatsAppFormat(to);
-
-        // Enviar respuesta
-        let result;
-        if (replyTo) {
-          // Enviar como respuesta a un mensaje específico
-          result = await this.bot.client.sendMessage(whatsappNumber, message, {
-            quotedMessageId: replyTo,
-          });
-        } else {
-          // Enviar mensaje normal
-          result = await this.bot.sendMessage(to, message);
-        }
-
-        res.json({
-          success: true,
-          data: {
-            messageId: result.messageId || result.id._serialized,
-            timestamp: Date.now(),
-          },
-        });
+        const result = await this.bot.sendMessage(to, message);
+        res.json({ success: true, data: result });
       } catch (error) {
-        this.log("error", "Error enviando respuesta:", {
-          error: error.message,
-        });
+        this.logger.error("Error enviando respuesta:", error);
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -235,12 +186,10 @@ class WhatsAppServer {
       }
     });
 
-    // Enviar mensajes masivos
     this.app.post("/send-bulk", async (req, res) => {
       try {
-        const { numbers, message, delay = 1000 } = req.body;
+        const { numbers, message } = req.body;
 
-        // Validar parámetros
         if (!numbers || !Array.isArray(numbers) || !message) {
           return res.status(400).json({
             success: false,
@@ -249,64 +198,49 @@ class WhatsAppServer {
           });
         }
 
-        // Validar array de números
-        const validation = PhoneValidator.validatePhoneNumbers(numbers);
-        if (!validation.valid) {
+        if (numbers.length > 50) {
           return res.status(400).json({
             success: false,
-            error: "Algunos números de teléfono son inválidos",
-            data: validation,
+            error: "Máximo 50 números por envío masivo",
           });
         }
 
-        // Validar longitud del mensaje
-        if (message.length > config.security.messageMaxLength) {
-          return res.status(400).json({
+        const status = this.bot.getStatus();
+        if (!status.isConnected) {
+          return res.status(503).json({
             success: false,
-            error: config.messages.messageTooLong,
+            error: "El bot no está conectado. Por favor, intenta más tarde.",
           });
         }
 
-        // Enviar mensajes con delay
         const results = [];
         const errors = [];
 
-        for (let i = 0; i < validation.validNumbers.length; i++) {
+        for (const number of numbers) {
           try {
-            const number = validation.validNumbers[i].normalized;
-            const result = await this.bot.sendMessage(number, message);
-            results.push({
-              number,
-              success: true,
-              messageId: result.messageId,
-            });
-
-            // Delay entre mensajes para evitar spam
-            if (i < validation.validNumbers.length - 1) {
-              await new Promise((resolve) => setTimeout(resolve, delay));
+            if (this.isValidPhoneNumber(number)) {
+              const result = await this.bot.sendMessage(number, message);
+              results.push({ number, success: true, data: result });
+            } else {
+              errors.push({ number, success: false, error: "Número inválido" });
             }
           } catch (error) {
-            errors.push({
-              number: validation.validNumbers[i].normalized,
-              error: error.message,
-            });
+            errors.push({ number, success: false, error: error.message });
           }
         }
 
         res.json({
           success: true,
           data: {
-            total: validation.validNumbers.length,
-            sent: results.length,
-            errors: errors.length,
+            total: numbers.length,
+            successful: results.length,
+            failed: errors.length,
             results,
             errors,
           },
         });
       } catch (error) {
-        this.log("error", "Error enviando mensajes masivos:", {
-          error: error.message,
-        });
+        this.logger.error("Error en envío masivo:", error);
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -314,37 +248,34 @@ class WhatsAppServer {
       }
     });
 
-    // Obtener información de contacto
-    this.app.get("/contact/:phoneNumber", async (req, res) => {
+    this.app.get("/contacts", async (req, res) => {
       try {
-        const { phoneNumber } = req.params;
-
-        // Validar número de teléfono
-        if (!PhoneValidator.isValidPhoneNumber(phoneNumber)) {
-          return res.status(400).json({
+        const status = this.bot.getStatus();
+        if (!status.isConnected) {
+          return res.status(503).json({
             success: false,
-            error: config.messages.invalidNumber,
+            error: "El bot no está conectado. Por favor, intenta más tarde.",
           });
         }
 
-        // Formatear número para WhatsApp
-        const whatsappNumber = PhoneValidator.toWhatsAppFormat(phoneNumber);
-
-        // Obtener información del contacto
-        const contact = await this.bot.getContactInfo(whatsappNumber);
+        const contacts = await this.bot.client.getContacts();
+        const formattedContacts = contacts
+          .filter((contact) => contact.isMyContact)
+          .map((contact) => ({
+            name: contact.pushname || contact.name || "Sin nombre",
+            number: this.bot.extractPhoneNumber(contact.id._serialized),
+            isMyContact: contact.isMyContact,
+          }));
 
         res.json({
           success: true,
           data: {
-            phoneNumber: PhoneValidator.normalizePhoneNumber(phoneNumber),
-            whatsappId: whatsappNumber,
-            contact,
+            total: formattedContacts.length,
+            contacts: formattedContacts,
           },
         });
       } catch (error) {
-        this.log("error", "Error obteniendo información de contacto:", {
-          error: error.message,
-        });
+        this.logger.error("Error obteniendo contactos:", error);
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -352,39 +283,26 @@ class WhatsAppServer {
       }
     });
 
-    // Listar chats activos
     this.app.get("/chats", async (req, res) => {
       try {
-        const { limit = 50, type } = req.query;
-
-        // Obtener chats
-        const chats = await this.bot.client.getChats();
-
-        // Filtrar por tipo si se especifica
-        let filteredChats = chats;
-        if (type === "group") {
-          filteredChats = chats.filter((chat) =>
-            PhoneValidator.isGroup(chat.id._serialized)
-          );
-        } else if (type === "private") {
-          filteredChats = chats.filter((chat) =>
-            PhoneValidator.isPrivateChat(chat.id._serialized)
-          );
+        const status = this.bot.getStatus();
+        if (!status.isConnected) {
+          return res.status(503).json({
+            success: false,
+            error: "El bot no está conectado. Por favor, intenta más tarde.",
+          });
         }
 
-        // Limitar resultados
-        const limitedChats = filteredChats.slice(0, parseInt(limit));
-
-        // Formatear respuesta
-        const formattedChats = limitedChats.map((chat) => ({
+        const chats = await this.bot.client.getChats();
+        const formattedChats = chats.map((chat) => ({
           id: chat.id._serialized,
           name: chat.name || "Sin nombre",
-          isGroup: PhoneValidator.isGroup(chat.id._serialized),
-          unreadCount: chat.unreadCount || 0,
+          isGroup: chat.isGroup,
+          unreadCount: chat.unreadCount,
           lastMessage: chat.lastMessage
             ? {
                 body: chat.lastMessage.body,
-                timestamp: chat.lastMessage.timestamp * 1000,
+                timestamp: chat.lastMessage.timestamp,
               }
             : null,
         }));
@@ -392,14 +310,12 @@ class WhatsAppServer {
         res.json({
           success: true,
           data: {
-            total: chats.length,
-            filtered: filteredChats.length,
-            returned: formattedChats.length,
+            total: formattedChats.length,
             chats: formattedChats,
           },
         });
       } catch (error) {
-        this.log("error", "Error obteniendo chats:", { error: error.message });
+        this.logger.error("Error obteniendo chats:", error);
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -407,162 +323,86 @@ class WhatsAppServer {
       }
     });
 
-    // Validar número de teléfono
-    this.app.post("/validate-phone", (req, res) => {
-      try {
-        const { phoneNumber } = req.body;
-
-        if (!phoneNumber) {
-          return res.status(400).json({
-            success: false,
-            error: 'El parámetro "phoneNumber" es requerido',
-          });
-        }
-
-        const isValid = PhoneValidator.isValidPhoneNumber(phoneNumber);
-        const normalized = PhoneValidator.normalizePhoneNumber(phoneNumber);
-        const whatsappFormat = PhoneValidator.toWhatsAppFormat(phoneNumber);
-
-        res.json({
-          success: true,
-          data: {
-            phoneNumber,
-            isValid,
-            normalized,
-            whatsappFormat,
-            displayFormat: PhoneValidator.formatForDisplay(phoneNumber),
-          },
-        });
-      } catch (error) {
-        this.log("error", "Error validando número de teléfono:", {
-          error: error.message,
-        });
-        res.status(500).json({
-          success: false,
-          error: error.message || "Error interno del servidor",
-        });
-      }
-    });
-
-    // Obtener QR code
     this.app.get("/qr", async (req, res) => {
       try {
-        const status = this.bot.getStatus();
-        if (status.isConnected) {
-          return res.json({
-            success: true,
-            data: {
-              connected: true,
-              message: "El bot ya está conectado",
-              qrCode: null,
-            },
-          });
-        }
-        const qrData = this.bot.getQRCode();
-        if (!qrData) {
-          return res.json({
-            success: false,
-            error:
-              "No hay QR code disponible. El bot puede estar en proceso de conexión.",
-            data: {
-              connected: false,
-              qrCode: null,
-            },
-          });
-        }
-        res.json({
-          success: true,
-          data: {
-            connected: false,
-            qrCode: qrData,
-            message: "Escanea este QR code con WhatsApp para conectar el bot",
-          },
-        });
-      } catch (error) {
-        this.log("error", "Error obteniendo QR code:", {
-          error: error.message,
-        });
-        res.status(500).json({
-          success: false,
-          error: "Error interno del servidor",
-        });
-      }
-    });
+        const qrCode = this.bot.getQRCode();
 
-    // Obtener imagen QR
-    this.app.get("/qr-image", async (req, res) => {
-      try {
-        const status = this.bot.getStatus();
-        if (status.isConnected) {
-          return res.status(400).json({
-            success: false,
-            error: "El bot ya está conectado",
-          });
-        }
-        const qrData = this.bot.getQRCode();
-        if (!qrData) {
+        if (!qrCode) {
           return res.status(404).json({
             success: false,
-            error: "No hay QR code disponible",
+            error: "No hay QR code disponible. El bot puede estar conectado.",
           });
         }
-        const qrImageBuffer = await qrcode.toBuffer(qrData, {
-          type: "png",
-          width: 300,
-          margin: 2,
-          color: { dark: "#000000", light: "#FFFFFF" },
-        });
-        res.setHeader("Content-Type", "image/png");
-        res.setHeader("Content-Length", qrImageBuffer.length);
-        res.send(qrImageBuffer);
+
+        const format = req.query.format || "text";
+
+        if (format === "image") {
+          const qrImage = await qrcode.toDataURL(qrCode);
+          res.json({
+            success: true,
+            data: {
+              qr: qrImage,
+              format: "data-url",
+            },
+          });
+        } else {
+          res.json({
+            success: true,
+            data: {
+              qr: qrCode,
+              format: "text",
+            },
+          });
+        }
       } catch (error) {
-        this.log("error", "Error generando imagen QR:", {
-          error: error.message,
-        });
+        this.logger.error("Error obteniendo QR:", error);
         res.status(500).json({
           success: false,
-          error: "Error interno del servidor",
+          error: error.message || "Error interno del servidor",
         });
       }
     });
 
-    // Regenerar QR code
-    this.app.post("/qr-regenerate", async (req, res) => {
+    this.app.post("/qr/regenerate", async (req, res) => {
       try {
-        const status = this.bot.getStatus();
-        if (status.isConnected) {
-          return res.json({
+        const newQR = await this.bot.regenerateQR();
+
+        if (!newQR) {
+          return res.status(404).json({
             success: false,
-            error: "El bot ya está conectado",
+            error: "No se pudo generar un nuevo QR code.",
           });
         }
-        const qrData = await this.bot.regenerateQR();
-        if (!qrData) {
-          return res.json({
-            success: false,
-            error: "No se pudo regenerar el QR code",
+
+        const format = req.query.format || "text";
+
+        if (format === "image") {
+          const qrImage = await qrcode.toDataURL(newQR);
+          res.json({
+            success: true,
+            data: {
+              qr: qrImage,
+              format: "data-url",
+            },
+          });
+        } else {
+          res.json({
+            success: true,
+            data: {
+              qr: newQR,
+              format: "text",
+            },
           });
         }
-        res.json({
-          success: true,
-          data: {
-            connected: false,
-            qrCode: qrData,
-            message: "Nuevo QR code generado. Escanea con WhatsApp.",
-          },
-        });
       } catch (error) {
-        this.log("error", "Error regenerando QR code:", {
-          error: error.message,
-        });
+        this.logger.error("Error regenerando QR:", error);
         res.status(500).json({
           success: false,
-          error: "Error interno del servidor",
+          error: error.message || "Error interno del servidor",
         });
       }
     });
 
-    // Manejo de errores 404
     this.app.use("*", (req, res) => {
       res.status(404).json({
         success: false,
@@ -570,76 +410,63 @@ class WhatsAppServer {
         availableEndpoints: [
           "GET /health",
           "GET /status",
-          "GET /qr",
-          "GET /qr-image",
-          "POST /qr-regenerate",
           "POST /send-message",
           "POST /send-response",
           "POST /send-bulk",
-          "GET /contact/:phoneNumber",
+          "GET /contacts",
           "GET /chats",
-          "POST /validate-phone",
+          "GET /qr",
+          "POST /qr/regenerate",
         ],
       });
     });
-
-    // Manejo de errores global
-    this.app.use((error, req, res, next) => {
-      this.log("error", "Error no manejado:", { error: error.message });
-      res.status(500).json({
-        success: false,
-        error: "Error interno del servidor",
-      });
-    });
   }
 
   /**
-   * Inicia el servidor y el bot
+   * Valida si un número de teléfono es válido
+   */
+  isValidPhoneNumber(phoneNumber) {
+    if (!phoneNumber || typeof phoneNumber !== "string") {
+      return false;
+    }
+    const cleanNumber = phoneNumber.replace(/\D/g, "");
+    return config.validation.phoneNumberPattern.test(cleanNumber);
+  }
+
+  /**
+   * Inicia el servidor
    */
   async start() {
     try {
-      this.log("info", "Iniciando servidor y bot...");
-
-      // Inicializar bot
       await this.bot.initialize();
 
-      // Iniciar servidor
-      const port = config.server.port;
-      const host = process.env.HOST || "0.0.0.0";
-      this.app.listen(port, host, () => {
-        this.log("info", `Servidor escuchando en ${host}:${port}`);
+      this.server = this.app.listen(config.server.port, "0.0.0.0", () => {
+        this.logger.info(
+          `Servidor WhatsApp API iniciado en puerto ${config.server.port}`
+        );
+        this.logger.info(`Ambiente: ${config.server.environment}`);
+        this.logger.info(`Webhook N8N: ${config.n8n.webhookUrl}`);
       });
     } catch (error) {
-      this.log("error", "Error iniciando servidor:", { error: error.message });
-      throw error;
+      this.logger.error("Error iniciando servidor:", error);
+      process.exit(1);
     }
   }
 
   /**
-   * Detiene el servidor y el bot
+   * Detiene el servidor
    */
   async stop() {
     try {
-      this.log("info", "Deteniendo servidor y bot...");
+      if (this.server) {
+        this.server.close();
+      }
       await this.bot.destroy();
-      this.log("info", "Servidor y bot detenidos correctamente");
+      this.logger.info("Servidor detenido correctamente");
     } catch (error) {
-      this.log("error", "Error deteniendo servidor:", { error: error.message });
-      throw error;
+      this.logger.error("Error deteniendo servidor:", error);
     }
   }
 }
 
-// Crear y exportar instancia del servidor
-const server = new WhatsAppServer();
-
-// Manejo de señales para cierre graceful
-process.on("SIGINT", () => server.stop());
-process.on("SIGTERM", () => server.stop());
-
-// Iniciar servidor si se ejecuta directamente
-if (require.main === module) {
-  server.start();
-}
-
-module.exports = server;
+module.exports = WhatsAppServer;

@@ -9,7 +9,7 @@ const readline = require("readline");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const WhatsAppServer = require("./server");
+const server = require("./server");
 
 // Colores para la terminal
 const colors = {
@@ -117,36 +117,24 @@ function showMenu() {
   console.log();
 }
 
-/**
- * Punto de entrada principal de la aplicación
- */
-async function main() {
+async function start() {
   try {
-    console.log("🚀 Iniciando WhatsApp Bot con N8N...");
-
-    const server = new WhatsAppServer();
-
-    // Manejar señales de terminación
-    process.on("SIGINT", async () => {
-      console.log("\n🛑 Recibida señal SIGINT, cerrando aplicación...");
-      await server.stop();
-      process.exit(0);
-    });
-
-    process.on("SIGTERM", async () => {
-      console.log("\n🛑 Recibida señal SIGTERM, cerrando aplicación...");
-      await server.stop();
-      process.exit(0);
-    });
-
-    // Iniciar servidor
     await server.start();
 
-    console.log("✅ Aplicación iniciada correctamente");
-    console.log("📱 Bot de WhatsApp listo para recibir mensajes");
-    console.log("🔗 API REST disponible en el puerto configurado");
+    // Manejar señales de terminación
+    process.on("SIGTERM", async () => {
+      console.log("Recibida señal SIGTERM");
+      await server.stop();
+      process.exit(0);
+    });
+
+    process.on("SIGINT", async () => {
+      console.log("Recibida señal SIGINT");
+      await server.stop();
+      process.exit(0);
+    });
   } catch (error) {
-    console.error("❌ Error iniciando la aplicación:", error.message);
+    console.error("Error fatal:", error);
     process.exit(1);
   }
 }
@@ -216,12 +204,84 @@ function showSystemStatus() {
   });
 }
 
+function main() {
+  // Verificar Node.js
+  const nodeVersion = process.version;
+  const majorVersion = parseInt(nodeVersion.slice(1).split(".")[0]);
+
+  if (majorVersion < 16) {
+    log("❌ Se requiere Node.js 16 o superior", "red");
+    log(`   Versión actual: ${nodeVersion}`, "red");
+    process.exit(1);
+  }
+
+  log("✓ Node.js compatible", "green");
+
+  // Crear directorio de logs
+  createLogsDirectory();
+
+  // Verificar archivo .env
+  checkEnvironment();
+
+  // Verificar dependencias
+  if (checkDependencies()) {
+    showMenu();
+  }
+
+  // Configurar interfaz de lectura
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  function handleInput(input) {
+    const choice = input.trim();
+
+    switch (choice) {
+      case "1":
+        rl.close();
+        start();
+        break;
+      case "2":
+        rl.close();
+        start();
+        break;
+      case "3":
+        rl.close();
+        start();
+        break;
+      case "4":
+        rl.close();
+        installDependencies();
+        break;
+      case "5":
+        rl.close();
+        showSystemStatus();
+        break;
+      case "6":
+        log("👋 ¡Hasta luego!", "green");
+        rl.close();
+        process.exit(0);
+        break;
+      default:
+        log("❌ Opción inválida. Por favor, selecciona 1-6.", "red");
+        setTimeout(() => {
+          showMenu();
+          rl.question("Selecciona una opción: ", handleInput);
+        }, 1000);
+    }
+  }
+
+  rl.question("Selecciona una opción: ", handleInput);
+}
+
 // Ejecutar si se llama directamente
 if (require.main === module) {
   main();
 }
 
 module.exports = {
+  start,
   installDependencies,
   showSystemStatus,
 };
