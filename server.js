@@ -119,7 +119,7 @@ class WhatsAppServer {
       }
     });
 
-    // Enviar mensaje individual
+    // Enviar mensaje individual - VERSION ACTUALIZADA
     this.app.post("/send-message", async (req, res) => {
       try {
         const { to, message } = req.body;
