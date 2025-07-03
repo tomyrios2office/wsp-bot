@@ -1,10 +1,19 @@
 const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode = require("qrcode-terminal");
 const axios = require("axios");
-const winston = require("winston");
 const config = require("./config");
 const MessageFormatter = require("./utils/messageFormatter");
 const PhoneValidator = require("./utils/phoneValidator");
+
+// Importar qrcode-terminal de forma opcional
+let qrcode;
+try {
+  qrcode = require("qrcode-terminal");
+} catch (error) {
+  console.log("qrcode-terminal no disponible, usando console.log para QR");
+  qrcode = {
+    generate: (qr) => console.log("QR Code generado:", qr),
+  };
+}
 
 /**
  * Clase principal del Bot de WhatsApp
@@ -14,38 +23,31 @@ class WhatsAppBot {
     this.client = null;
     this.isConnected = false;
     this.reconnectAttempts = 0;
-    this.logger = this.setupLogger();
     this.messageQueue = [];
     this.isProcessingQueue = false;
     this.currentQR = null;
   }
 
   /**
-   * Configura el sistema de logging
+   * Log simple sin Winston para reducir dependencias
    */
-  setupLogger() {
-    return winston.createLogger({
-      level: config.logging.level,
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.errors({ stack: true }),
-        winston.format.json()
-      ),
-      defaultMeta: { service: "whatsapp-bot" },
-      transports: [
-        new winston.transports.File({
-          filename: "logs/error.log",
-          level: "error",
-        }),
-        new winston.transports.File({ filename: "logs/combined.log" }),
-        new winston.transports.Console({
-          format: winston.format.combine(
-            winston.format.colorize(),
-            winston.format.simple()
-          ),
-        }),
-      ],
-    });
+  log(level, message, data = {}) {
+    const timestamp = new Date().toISOString();
+    const logData = {
+      timestamp,
+      level,
+      service: "whatsapp-bot",
+      message,
+      ...data,
+    };
+
+    if (level === "error") {
+      console.error(JSON.stringify(logData));
+    } else if (level === "warn") {
+      console.warn(JSON.stringify(logData));
+    } else {
+      console.log(JSON.stringify(logData));
+    }
   }
 
   /**
@@ -53,7 +55,29 @@ class WhatsAppBot {
    */
   async initialize() {
     try {
-      this.logger.info("Iniciando bot de WhatsApp...");
+      this.log("info", "Iniciando bot de WhatsApp...");
+
+      // Configuración optimizada de Puppeteer para Railway
+      const puppeteerConfig = {
+        headless: true,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-accelerated-2d-canvas",
+          "--no-first-run",
+          "--no-zygote",
+          "--single-process",
+          "--disable-gpu",
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--disable-features=TranslateUI",
+          "--disable-ipc-flooding-protection",
+        ],
+        timeout: 60000,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      };
 
       // Crear cliente de WhatsApp
       this.client = new Client({
@@ -61,11 +85,7 @@ class WhatsAppBot {
           dataPath: config.whatsapp.session.dataPath,
           clientId: config.whatsapp.session.clientId,
         }),
-        puppeteer: {
-          headless: config.whatsapp.puppeteer.headless,
-          args: config.whatsapp.puppeteer.args,
-          timeout: config.whatsapp.puppeteer.timeout,
-        },
+        puppeteer: puppeteerConfig,
       });
 
       // Configurar eventos
@@ -74,9 +94,12 @@ class WhatsAppBot {
       // Inicializar cliente
       await this.client.initialize();
 
-      this.logger.info("Bot de WhatsApp inicializado correctamente");
+      this.log("info", "Bot de WhatsApp inicializado correctamente");
     } catch (error) {
-      this.logger.error("Error inicializando bot:", error);
+      this.log("error", "Error inicializando bot:", {
+        error: error.message,
+        stack: error.stack,
+      });
       throw error;
     }
   }
@@ -88,7 +111,7 @@ class WhatsAppBot {
     // Evento de QR Code
     this.client.on("qr", (qr) => {
       this.currentQR = qr;
-      this.logger.info("QR Code generado. Escanea con WhatsApp:");
+      this.log("info", "QR Code generado. Escanea con WhatsApp:");
       qrcode.generate(qr, { small: true });
     });
 
@@ -97,18 +120,18 @@ class WhatsAppBot {
       this.isConnected = true;
       this.currentQR = null;
       this.reconnectAttempts = 0;
-      this.logger.info("Bot de WhatsApp conectado y listo");
+      this.log("info", "Bot de WhatsApp conectado y listo");
       this.processMessageQueue();
     });
 
     // Evento de autenticación
     this.client.on("authenticated", () => {
-      this.logger.info("Autenticación exitosa");
+      this.log("info", "Autenticación exitosa");
     });
 
     // Evento de autenticación fallida
     this.client.on("auth_failure", (msg) => {
-      this.logger.error("Error de autenticación:", msg);
+      this.log("error", "Error de autenticación:", { message: msg });
     });
 
     // Evento de mensaje recibido
@@ -119,18 +142,18 @@ class WhatsAppBot {
     // Evento de desconexión
     this.client.on("disconnected", (reason) => {
       this.isConnected = false;
-      this.logger.warn("Bot desconectado:", reason);
+      this.log("warn", "Bot desconectado:", { reason });
       this.handleDisconnection();
     });
 
     // Evento de cambio de estado
     this.client.on("change_state", (state) => {
-      this.logger.info("Estado del bot cambiado:", state);
+      this.log("info", "Estado del bot cambiado:", { state });
     });
 
     // Evento de carga de mensajes
     this.client.on("loading_screen", (percent, message) => {
-      this.logger.info(`Cargando: ${percent}% - ${message}`);
+      this.log("info", `Cargando: ${percent}% - ${message}`);
     });
   }
 
@@ -141,11 +164,11 @@ class WhatsAppBot {
     try {
       // Validar mensaje
       if (!MessageFormatter.isValidMessage(message)) {
-        this.logger.debug("Mensaje ignorado (inválido o del propio bot)");
+        this.log("debug", "Mensaje ignorado (inválido o del propio bot)");
         return;
       }
 
-      this.logger.info("Mensaje recibido:", {
+      this.log("info", "Mensaje recibido:", {
         from: message.from,
         type: message.type,
         hasMedia: message.hasMedia,
@@ -166,7 +189,7 @@ class WhatsAppBot {
       );
 
       if (!formattedMessage) {
-        this.logger.error("Error formateando mensaje para N8N");
+        this.log("error", "Error formateando mensaje para N8N");
         return;
       }
 
@@ -176,7 +199,10 @@ class WhatsAppBot {
       // Agregar a cola de procesamiento si es necesario
       this.addToMessageQueue(formattedMessage);
     } catch (error) {
-      this.logger.error("Error procesando mensaje entrante:", error);
+      this.log("error", "Error procesando mensaje entrante:", {
+        error: error.message,
+        stack: error.stack,
+      });
     }
   }
 
@@ -192,7 +218,9 @@ class WhatsAppBot {
         isMyContact: contact.isMyContact || false,
       };
     } catch (error) {
-      this.logger.error("Error obteniendo información del contacto:", error);
+      this.log("error", "Error obteniendo información del contacto:", {
+        error: error.message,
+      });
       return {
         name: "Desconocido",
         number: PhoneValidator.fromWhatsAppFormat(contactId),
@@ -212,7 +240,9 @@ class WhatsAppBot {
         isGroup: PhoneValidator.isGroup(chatId),
       };
     } catch (error) {
-      this.logger.error("Error obteniendo información del chat:", error);
+      this.log("error", "Error obteniendo información del chat:", {
+        error: error.message,
+      });
       return {
         name: "Chat privado",
         isGroup: PhoneValidator.isGroup(chatId),
@@ -233,14 +263,14 @@ class WhatsAppBot {
         },
       });
 
-      this.logger.info("Mensaje enviado a N8N exitosamente:", {
+      this.log("info", "Mensaje enviado a N8N exitosamente:", {
         messageId: messageData.messageId,
         status: response.status,
       });
 
       return response.data;
     } catch (error) {
-      this.logger.error("Error enviando mensaje a N8N:", {
+      this.log("error", "Error enviando mensaje a N8N:", {
         messageId: messageData.messageId,
         error: error.message,
         status: error.response?.status,
@@ -257,11 +287,12 @@ class WhatsAppBot {
   async retryWebhookSend(messageData, attempt = 1) {
     try {
       if (attempt > config.n8n.retryAttempts) {
-        this.logger.error("Máximo de reintentos alcanzado para webhook");
+        this.log("error", "Máximo de reintentos alcanzado para webhook");
         return;
       }
 
-      this.logger.info(
+      this.log(
+        "info",
         `Reintentando envío a N8N (intento ${attempt}/${config.n8n.retryAttempts})`
       );
 
@@ -276,12 +307,12 @@ class WhatsAppBot {
         },
       });
 
-      this.logger.info("Reenvío a N8N exitoso:", {
+      this.log("info", "Reenvío a N8N exitoso:", {
         messageId: messageData.messageId,
         attempt,
       });
     } catch (error) {
-      this.logger.error(`Error en reintento ${attempt}:`, error.message);
+      this.log("error", `Error en reintento ${attempt}:`, error.message);
       await this.retryWebhookSend(messageData, attempt + 1);
     }
   }
@@ -315,10 +346,10 @@ class WhatsAppBot {
       while (this.messageQueue.length > 0) {
         const message = this.messageQueue.shift();
         // Aquí se puede agregar lógica adicional de procesamiento
-        this.logger.debug("Procesando mensaje de cola:", message.messageId);
+        this.log("debug", "Procesando mensaje de cola:", message.messageId);
       }
     } catch (error) {
-      this.logger.error("Error procesando cola de mensajes:", error);
+      this.log("error", "Error procesando cola de mensajes:", error);
     } finally {
       this.isProcessingQueue = false;
     }
@@ -330,7 +361,8 @@ class WhatsAppBot {
   async handleDisconnection() {
     if (this.reconnectAttempts < config.reconnection.maxAttempts) {
       this.reconnectAttempts++;
-      this.logger.info(
+      this.log(
+        "info",
         `Intentando reconexión ${this.reconnectAttempts}/${config.reconnection.maxAttempts}`
       );
 
@@ -338,11 +370,11 @@ class WhatsAppBot {
         try {
           await this.initialize();
         } catch (error) {
-          this.logger.error("Error en reconexión:", error);
+          this.log("error", "Error en reconexión:", error);
         }
       }, config.reconnection.interval);
     } else {
-      this.logger.error("Máximo de intentos de reconexión alcanzado");
+      this.log("error", "Máximo de intentos de reconexión alcanzado");
     }
   }
 
@@ -371,7 +403,7 @@ class WhatsAppBot {
       // Enviar mensaje
       const response = await this.client.sendMessage(whatsappNumber, text);
 
-      this.logger.info("Mensaje enviado exitosamente:", {
+      this.log("info", "Mensaje enviado exitosamente:", {
         to: whatsappNumber,
         messageId: response.id._serialized,
       });
@@ -382,7 +414,7 @@ class WhatsAppBot {
         timestamp: Date.now(),
       };
     } catch (error) {
-      this.logger.error("Error enviando mensaje:", error);
+      this.log("error", "Error enviando mensaje:", error);
       throw error;
     }
   }
@@ -404,16 +436,16 @@ class WhatsAppBot {
    */
   async destroy() {
     try {
-      this.logger.info("Cerrando bot de WhatsApp...");
+      this.log("info", "Cerrando bot de WhatsApp...");
 
       if (this.client) {
         await this.client.destroy();
       }
 
       this.isConnected = false;
-      this.logger.info("Bot cerrado correctamente");
+      this.log("info", "Bot cerrado correctamente");
     } catch (error) {
-      this.logger.error("Error cerrando bot:", error);
+      this.log("error", "Error cerrando bot:", error);
     }
   }
 
@@ -430,7 +462,7 @@ class WhatsAppBot {
       await this.initialize();
       return this.currentQR;
     } catch (error) {
-      this.logger.error("Error regenerando QR:", error);
+      this.log("error", "Error regenerando QR:", error);
       return null;
     }
   }

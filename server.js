@@ -1,7 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
-const winston = require("winston");
 const config = require("./config");
 const WhatsAppBot = require("./bot");
 const PhoneValidator = require("./utils/phoneValidator");
@@ -14,54 +13,39 @@ const qrcode = require("qrcode");
 class WhatsAppServer {
   constructor() {
     this.app = express();
-    this.logger = this.setupLogger();
     this.setupMiddleware();
     this.setupRoutes();
     this.bot = new WhatsAppBot();
   }
 
   /**
-   * Configura el sistema de logging
+   * Log simple sin Winston para reducir dependencias
    */
-  setupLogger() {
-    return winston.createLogger({
-      level: config.logging.level,
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.errors({ stack: true }),
-        winston.format.json()
-      ),
-      defaultMeta: { service: "whatsapp-api" },
-      transports: [
-        new winston.transports.File({
-          filename: "logs/api-error.log",
-          level: "error",
-        }),
-        new winston.transports.File({ filename: "logs/api-combined.log" }),
-        new winston.transports.Console({
-          format: winston.format.combine(
-            winston.format.colorize(),
-            winston.format.simple()
-          ),
-        }),
-      ],
-    });
+  log(level, message, data = {}) {
+    const timestamp = new Date().toISOString();
+    const logData = {
+      timestamp,
+      level,
+      service: "whatsapp-api",
+      message,
+      ...data,
+    };
+
+    if (level === "error") {
+      console.error(JSON.stringify(logData));
+    } else if (level === "warn") {
+      console.warn(JSON.stringify(logData));
+    } else {
+      console.log(JSON.stringify(logData));
+    }
   }
 
   /**
    * Configura middleware de Express
    */
   setupMiddleware() {
-    // CORS
-    this.app.use(
-      cors({
-        origin: process.env.ALLOWED_ORIGINS
-          ? process.env.ALLOWED_ORIGINS.split(",")
-          : "*",
-        methods: ["GET", "POST", "PUT", "DELETE"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-      })
-    );
+    // CORS simplificado
+    this.app.use(cors());
 
     // Rate limiting
     const limiter = rateLimit({
@@ -80,12 +64,11 @@ class WhatsAppServer {
     this.app.use(express.json({ limit: "10mb" }));
     this.app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-    // Logging middleware
+    // Logging middleware simplificado
     this.app.use((req, res, next) => {
-      this.logger.info(`${req.method} ${req.path}`, {
+      this.log("info", `${req.method} ${req.path}`, {
         ip: req.ip,
         userAgent: req.get("User-Agent"),
-        body: req.method === "POST" ? req.body : undefined,
       });
       next();
     });
@@ -113,7 +96,9 @@ class WhatsAppServer {
           data: status,
         });
       } catch (error) {
-        this.logger.error("Error obteniendo estado del bot:", error);
+        this.log("error", "Error obteniendo estado del bot:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: "Error interno del servidor",
@@ -126,14 +111,14 @@ class WhatsAppServer {
       try {
         const { to, message } = req.body;
 
-        this.logger.info("Recibida solicitud de envío de mensaje:", {
+        this.log("info", "Recibida solicitud de envío de mensaje:", {
           to,
           messageLength: message?.length,
         });
 
         // Validar parámetros
         if (!to || !message) {
-          this.logger.warn("Parámetros faltantes en solicitud");
+          this.log("warn", "Parámetros faltantes en solicitud");
           return res.status(400).json({
             success: false,
             error: 'Los parámetros "to" y "message" son requeridos',
@@ -142,7 +127,7 @@ class WhatsAppServer {
 
         // Validar número de teléfono
         if (!PhoneValidator.isValidPhoneNumber(to)) {
-          this.logger.warn("Número de teléfono inválido:", to);
+          this.log("warn", "Número de teléfono inválido:", { number: to });
           return res.status(400).json({
             success: false,
             error: config.messages.invalidNumber,
@@ -151,7 +136,7 @@ class WhatsAppServer {
 
         // Validar longitud del mensaje
         if (message.length > config.security.messageMaxLength) {
-          this.logger.warn("Mensaje demasiado largo");
+          this.log("warn", "Mensaje demasiado largo");
           return res.status(400).json({
             success: false,
             error: config.messages.messageTooLong,
@@ -161,26 +146,26 @@ class WhatsAppServer {
         // Verificar estado del bot
         const status = this.bot.getStatus();
         if (!status.isConnected) {
-          this.logger.error("Bot no conectado al intentar enviar mensaje");
+          this.log("error", "Bot no conectado al intentar enviar mensaje");
           return res.status(503).json({
             success: false,
             error: "El bot no está conectado. Por favor, intenta más tarde.",
           });
         }
 
-        this.logger.info("Enviando mensaje a WhatsApp...");
+        this.log("info", "Enviando mensaje a WhatsApp...");
 
         // Enviar mensaje
         const result = await this.bot.sendMessage(to, message);
 
-        this.logger.info("Mensaje enviado exitosamente:", result);
+        this.log("info", "Mensaje enviado exitosamente:", result);
 
         res.json({
           success: true,
           data: result,
         });
       } catch (error) {
-        this.logger.error("Error enviando mensaje:", error);
+        this.log("error", "Error enviando mensaje:", { error: error.message });
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -240,7 +225,9 @@ class WhatsAppServer {
           },
         });
       } catch (error) {
-        this.logger.error("Error enviando respuesta:", error);
+        this.log("error", "Error enviando respuesta:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -317,7 +304,9 @@ class WhatsAppServer {
           },
         });
       } catch (error) {
-        this.logger.error("Error enviando mensajes masivos:", error);
+        this.log("error", "Error enviando mensajes masivos:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -353,7 +342,9 @@ class WhatsAppServer {
           },
         });
       } catch (error) {
-        this.logger.error("Error obteniendo información de contacto:", error);
+        this.log("error", "Error obteniendo información de contacto:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -408,7 +399,7 @@ class WhatsAppServer {
           },
         });
       } catch (error) {
-        this.logger.error("Error obteniendo chats:", error);
+        this.log("error", "Error obteniendo chats:", { error: error.message });
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -443,7 +434,9 @@ class WhatsAppServer {
           },
         });
       } catch (error) {
-        this.logger.error("Error validando número de teléfono:", error);
+        this.log("error", "Error validando número de teléfono:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: error.message || "Error interno del servidor",
@@ -486,7 +479,9 @@ class WhatsAppServer {
           },
         });
       } catch (error) {
-        this.logger.error("Error obteniendo QR code:", error);
+        this.log("error", "Error obteniendo QR code:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: "Error interno del servidor",
@@ -521,7 +516,9 @@ class WhatsAppServer {
         res.setHeader("Content-Length", qrImageBuffer.length);
         res.send(qrImageBuffer);
       } catch (error) {
-        this.logger.error("Error generando imagen QR:", error);
+        this.log("error", "Error generando imagen QR:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: "Error interno del servidor",
@@ -555,7 +552,9 @@ class WhatsAppServer {
           },
         });
       } catch (error) {
-        this.logger.error("Error regenerando QR code:", error);
+        this.log("error", "Error regenerando QR code:", {
+          error: error.message,
+        });
         res.status(500).json({
           success: false,
           error: "Error interno del servidor",
@@ -586,7 +585,7 @@ class WhatsAppServer {
 
     // Manejo de errores global
     this.app.use((error, req, res, next) => {
-      this.logger.error("Error no manejado:", error);
+      this.log("error", "Error no manejado:", { error: error.message });
       res.status(500).json({
         success: false,
         error: "Error interno del servidor",
@@ -599,7 +598,7 @@ class WhatsAppServer {
    */
   async start() {
     try {
-      this.logger.info("Iniciando servidor y bot...");
+      this.log("info", "Iniciando servidor y bot...");
 
       // Inicializar bot
       await this.bot.initialize();
@@ -608,10 +607,10 @@ class WhatsAppServer {
       const port = config.server.port;
       const host = process.env.HOST || "0.0.0.0";
       this.app.listen(port, host, () => {
-        this.logger.info(`Servidor escuchando en ${host}:${port}`);
+        this.log("info", `Servidor escuchando en ${host}:${port}`);
       });
     } catch (error) {
-      this.logger.error("Error iniciando servidor:", error);
+      this.log("error", "Error iniciando servidor:", { error: error.message });
       throw error;
     }
   }
@@ -621,11 +620,11 @@ class WhatsAppServer {
    */
   async stop() {
     try {
-      this.logger.info("Deteniendo servidor y bot...");
+      this.log("info", "Deteniendo servidor y bot...");
       await this.bot.destroy();
-      this.logger.info("Servidor y bot detenidos correctamente");
+      this.log("info", "Servidor y bot detenidos correctamente");
     } catch (error) {
-      this.logger.error("Error deteniendo servidor:", error);
+      this.log("error", "Error deteniendo servidor:", { error: error.message });
       throw error;
     }
   }

@@ -1,91 +1,61 @@
 require("dotenv").config();
 
 /**
- * Configuración centralizada del sistema de bot de WhatsApp
+ * Configuración centralizada del sistema
  */
 const config = {
-  // Configuración del Webhook N8N
+  // Configuración del servidor
+  server: {
+    port: process.env.PORT || 3000,
+    host: process.env.HOST || "0.0.0.0",
+  },
+
+  // Configuración de WhatsApp
+  whatsapp: {
+    session: {
+      dataPath: process.env.WHATSAPP_SESSION_PATH || "./sessions",
+      clientId: process.env.WHATSAPP_CLIENT_ID || "bot-client",
+    },
+  },
+
+  // Configuración de N8N
   n8n: {
     webhookUrl:
-      process.env.N8N_WEBHOOK_URL ||
-      "https://primary-production-87c85.up.railway.app/webhook-test/1a8d1893-2662-4e43-af10-14f2d2fffa2d",
-    timeout: parseInt(process.env.WEBHOOK_TIMEOUT) || 10000,
-    retryAttempts: parseInt(process.env.WEBHOOK_RETRY_ATTEMPTS) || 3,
+      process.env.N8N_WEBHOOK_URL || "http://localhost:5678/webhook/whatsapp",
+    timeout: parseInt(process.env.N8N_TIMEOUT) || 10000,
+    retryAttempts: parseInt(process.env.N8N_RETRY_ATTEMPTS) || 3,
+    retryDelay: parseInt(process.env.N8N_RETRY_DELAY) || 5000,
   },
 
-  // Configuración del Servidor
-  server: {
-    port: parseInt(process.env.PORT) || 3000,
-    environment: process.env.NODE_ENV || "development",
+  // Configuración de reconexión
+  reconnection: {
+    maxAttempts: parseInt(process.env.RECONNECTION_MAX_ATTEMPTS) || 5,
+    interval: parseInt(process.env.RECONNECTION_INTERVAL) || 30000,
   },
 
-  // Configuración Regional
-  regional: {
-    countryCode: process.env.COUNTRY_CODE || "54",
-    defaultCountry: "AR",
-  },
-
-  // Configuración de Logs
-  logging: {
-    level: process.env.LOG_LEVEL || "info",
-    format: "combined",
-  },
-
-  // Configuración de WhatsApp Web
-  whatsapp: {
-    puppeteer: {
-      headless: process.env.PUPPETEER_HEADLESS === "true",
-      args: (
-        process.env.PUPPETEER_ARGS ||
-        "--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-accelerated-2d-canvas,--no-first-run,--no-zygote,--disable-gpu"
-      ).split(","),
-      timeout: 60000,
-    },
-    session: {
-      dataPath: "./.wwebjs_auth",
-      clientId: "whatsapp-bot-n8n",
-    },
-  },
-
-  // Configuración de Seguridad
+  // Configuración de seguridad
   security: {
     rateLimit: {
-      windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) || 60000,
+      windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutos
       maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
     },
     messageMaxLength: parseInt(process.env.MESSAGE_MAX_LENGTH) || 4096,
-    allowedFileTypes: ["image", "audio", "document", "video"],
-    maxFileSize: 16 * 1024 * 1024, // 16MB
   },
 
-  // Configuración de Reconexión
-  reconnection: {
-    interval: parseInt(process.env.RECONNECT_INTERVAL) || 5000,
-    maxAttempts: parseInt(process.env.MAX_RECONNECT_ATTEMPTS) || 10,
-  },
-
-  // Configuración de Mensajes
+  // Mensajes del sistema
   messages: {
-    welcome: "¡Hola! Soy un bot de WhatsApp. ¿En qué puedo ayudarte?",
-    error: "Lo siento, ha ocurrido un error. Por favor, intenta de nuevo.",
-    invalidNumber: "El número de teléfono proporcionado no es válido.",
+    invalidNumber:
+      "Número de teléfono inválido. Debe ser un número argentino válido.",
     messageTooLong: "El mensaje es demasiado largo. Máximo 4096 caracteres.",
-    rateLimitExceeded:
-      "Has enviado demasiados mensajes. Por favor, espera un momento.",
+    botNotConnected: "El bot no está conectado. Por favor, intenta más tarde.",
+    webhookError:
+      "Error enviando mensaje a N8N. Revisa la configuración del webhook.",
   },
 
-  // Configuración de Validación
-  validation: {
-    phoneNumberPattern: /^(\+?54)?9?1[1-9]\d{6,9}$/,
-    messageTypes: [
-      "chat",
-      "image",
-      "audio",
-      "document",
-      "video",
-      "location",
-      "contact",
-    ],
+  // Configuración de validación de números
+  phoneValidation: {
+    defaultCountry: "AR",
+    allowedCountries: ["AR"],
   },
 };
 
