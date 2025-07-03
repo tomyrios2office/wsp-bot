@@ -414,6 +414,42 @@ class WhatsAppServer {
       }
     });
 
+    // Listar contactos
+    this.app.get("/contacts", async (req, res) => {
+      try {
+        const status = this.bot.getStatus();
+        if (!status.isConnected) {
+          return res.status(503).json({
+            success: false,
+            error: "El bot no está conectado. Por favor, intenta más tarde.",
+          });
+        }
+
+        const contacts = await this.bot.client.getContacts();
+        const formattedContacts = contacts
+          .filter((contact) => contact.isMyContact)
+          .map((contact) => ({
+            name: contact.pushname || contact.name || "Sin nombre",
+            number: this.bot.extractPhoneNumber(contact.id._serialized),
+            isMyContact: contact.isMyContact,
+          }));
+
+        res.json({
+          success: true,
+          data: {
+            total: formattedContacts.length,
+            contacts: formattedContacts,
+          },
+        });
+      } catch (error) {
+        this.logger.error("Error obteniendo contactos:", error);
+        res.status(500).json({
+          success: false,
+          error: error.message || "Error interno del servidor",
+        });
+      }
+    });
+
     // Validar número de teléfono
     this.app.post("/validate-phone", (req, res) => {
       try {
@@ -577,6 +613,7 @@ class WhatsAppServer {
           "POST /send-bulk",
           "GET /contact/:phoneNumber",
           "GET /chats",
+          "GET /contacts",
           "POST /validate-phone",
         ],
       });

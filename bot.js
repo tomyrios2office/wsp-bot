@@ -430,30 +430,208 @@ class WhatsAppBot {
   }
 
   isValidMessage(message) {
-    // Implement the logic to validate the message
-    return true; // Placeholder return, actual implementation needed
+    try {
+      if (!message || !message.from) return false;
+      if (message.fromMe) return false;
+      if (!message.body && !message.hasMedia) return false;
+      if (
+        message.body &&
+        message.body.length > config.security.messageMaxLength
+      ) {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.logger.error("Error validando mensaje:", error);
+      return false;
+    }
   }
 
   formatMessageForN8N(message, contact, chat) {
-    // Implement the logic to format the message for N8N
-    return {
-      // Populate the message data for N8N
-    };
+    try {
+      return {
+        messageId: message.id._serialized,
+        from: message.from,
+        fromNumber: this.extractPhoneNumber(message.from),
+        to: message.to,
+        body: message.body || "",
+        type: message.type,
+        timestamp: Math.floor(message.timestamp * 1000),
+        isGroupMsg: message.from.includes("@g.us"),
+        contact: {
+          name: contact?.name || "Desconocido",
+          number: this.extractPhoneNumber(message.from),
+          isMyContact: contact?.isMyContact || false,
+        },
+        chat: {
+          name: chat?.name || "Chat privado",
+          isGroup: chat?.isGroup || false,
+        },
+        metadata: {
+          hasMedia: message.hasMedia,
+          mediaType: message.type,
+          quotedMessage: message.quotedMsg
+            ? {
+                id: message.quotedMsg.id._serialized,
+                body: message.quotedMsg.body,
+              }
+            : null,
+        },
+        ...(message.hasMedia && {
+          media: {
+            mimetype: message.mimetype,
+            filename: message.filename,
+            size: message.size,
+          },
+        }),
+      };
+    } catch (error) {
+      this.logger.error("Error formateando mensaje para N8N:", error);
+      return null;
+    }
+  }
+
+  extractPhoneNumber(whatsappId) {
+    if (!whatsappId) return "";
+    let number = whatsappId.replace("@c.us", "").replace("@g.us", "");
+    if (!number.startsWith("54") && !number.startsWith("+54")) {
+      number = "54" + number;
+    }
+    return number.replace("+", "");
   }
 
   toWhatsAppFormat(number) {
-    // Implement the logic to convert the number to WhatsApp format
-    return number; // Placeholder return, actual implementation needed
+    try {
+      if (!number) return "";
+      let cleanNumber = number.replace(/\D/g, "");
+      if (!cleanNumber.startsWith("54")) {
+        cleanNumber = "54" + cleanNumber;
+      }
+      return cleanNumber + "@c.us";
+    } catch (error) {
+      this.logger.error("Error convirtiendo número a formato WhatsApp:", error);
+      return number;
+    }
   }
 
   isValidPhoneNumber(number) {
-    // Implement the logic to validate the phone number
-    return true; // Placeholder return, actual implementation needed
+    try {
+      if (!number || typeof number !== "string") {
+        return false;
+      }
+      const cleanNumber = number.replace(/\D/g, "");
+      return config.validation.phoneNumberPattern.test(cleanNumber);
+    } catch (error) {
+      this.logger.error("Error validando número de teléfono:", error);
+      return false;
+    }
   }
 
   isGroup(chatId) {
-    // Implement the logic to check if the chat is a group
-    return false; // Placeholder return, actual implementation needed
+    try {
+      return chatId && chatId.includes("@g.us");
+    } catch (error) {
+      this.logger.error("Error verificando si es grupo:", error);
+      return false;
+    }
+  }
+
+  isPrivateChat(chatId) {
+    try {
+      return chatId && chatId.includes("@c.us");
+    } catch (error) {
+      this.logger.error("Error verificando si es chat privado:", error);
+      return false;
+    }
+  }
+
+  validatePhoneNumbers(phoneNumbers) {
+    try {
+      if (!Array.isArray(phoneNumbers)) {
+        return {
+          valid: false,
+          error: "El parámetro debe ser un array",
+          validNumbers: [],
+          invalidNumbers: [],
+        };
+      }
+
+      const validNumbers = [];
+      const invalidNumbers = [];
+
+      phoneNumbers.forEach((number, index) => {
+        if (this.isValidPhoneNumber(number)) {
+          validNumbers.push({
+            original: number,
+            normalized: this.normalizePhoneNumber(number),
+            index,
+          });
+        } else {
+          invalidNumbers.push({
+            original: number,
+            index,
+            error: "Número inválido",
+          });
+        }
+      });
+
+      return {
+        valid: invalidNumbers.length === 0,
+        total: phoneNumbers.length,
+        validCount: validNumbers.length,
+        invalidCount: invalidNumbers.length,
+        validNumbers,
+        invalidNumbers,
+      };
+    } catch (error) {
+      this.logger.error("Error validando números de teléfono:", error);
+      return {
+        valid: false,
+        error: error.message,
+        validNumbers: [],
+        invalidNumbers: [],
+      };
+    }
+  }
+
+  normalizePhoneNumber(phoneNumber) {
+    try {
+      if (!phoneNumber) return "";
+      let cleanNumber = phoneNumber.replace(/\D/g, "");
+      if (cleanNumber.startsWith("54")) {
+        return cleanNumber;
+      }
+      if (cleanNumber.length === 10 && cleanNumber.startsWith("9")) {
+        cleanNumber = "54" + cleanNumber;
+      } else if (cleanNumber.length === 8) {
+        cleanNumber = "549" + cleanNumber;
+      } else if (cleanNumber.length === 11 && cleanNumber.startsWith("9")) {
+        cleanNumber = "54" + cleanNumber;
+      } else if (cleanNumber.length === 9 && cleanNumber.startsWith("1")) {
+        cleanNumber = "549" + cleanNumber;
+      }
+      return cleanNumber;
+    } catch (error) {
+      this.logger.error("Error normalizando número de teléfono:", error);
+      return phoneNumber;
+    }
+  }
+
+  formatForDisplay(phoneNumber) {
+    try {
+      const normalized = this.normalizePhoneNumber(phoneNumber);
+      if (normalized.length === 12 && normalized.startsWith("54")) {
+        const areaCode = normalized.substring(2, 4);
+        const prefix = normalized.substring(4, 6);
+        const firstPart = normalized.substring(6, 10);
+        const secondPart = normalized.substring(10, 12);
+        return `+54 ${areaCode} ${prefix} ${firstPart}-${secondPart}`;
+      }
+      return normalized;
+    } catch (error) {
+      this.logger.error("Error formateando número para mostrar:", error);
+      return phoneNumber;
+    }
   }
 }
 
