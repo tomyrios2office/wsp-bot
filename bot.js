@@ -17,6 +17,7 @@ class WhatsAppBot {
     this.logger = this.setupLogger();
     this.messageQueue = [];
     this.isProcessingQueue = false;
+    this.currentQR = null;
   }
 
   /**
@@ -86,6 +87,7 @@ class WhatsAppBot {
   setupEvents() {
     // Evento de QR Code
     this.client.on("qr", (qr) => {
+      this.currentQR = qr;
       this.logger.info("QR Code generado. Escanea con WhatsApp:");
       qrcode.generate(qr, { small: true });
     });
@@ -93,6 +95,7 @@ class WhatsAppBot {
     // Evento de autenticación exitosa
     this.client.on("ready", () => {
       this.isConnected = true;
+      this.currentQR = null;
       this.reconnectAttempts = 0;
       this.logger.info("Bot de WhatsApp conectado y listo");
       this.processMessageQueue();
@@ -411,6 +414,24 @@ class WhatsAppBot {
       this.logger.info("Bot cerrado correctamente");
     } catch (error) {
       this.logger.error("Error cerrando bot:", error);
+    }
+  }
+
+  getQRCode() {
+    return this.currentQR;
+  }
+
+  async regenerateQR() {
+    try {
+      if (this.isConnected) {
+        return null;
+      }
+      await this.client.destroy();
+      await this.initialize();
+      return this.currentQR;
+    } catch (error) {
+      this.logger.error("Error regenerando QR:", error);
+      return null;
     }
   }
 }

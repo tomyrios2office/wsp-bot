@@ -6,6 +6,7 @@ const config = require("./config");
 const WhatsAppBot = require("./bot");
 const PhoneValidator = require("./utils/phoneValidator");
 const MessageFormatter = require("./utils/messageFormatter");
+const qrcode = require("qrcode");
 
 /**
  * Servidor Express con API REST para el bot de WhatsApp
@@ -450,6 +451,118 @@ class WhatsAppServer {
       }
     });
 
+    // Obtener QR code
+    this.app.get("/qr", async (req, res) => {
+      try {
+        const status = this.bot.getStatus();
+        if (status.isConnected) {
+          return res.json({
+            success: true,
+            data: {
+              connected: true,
+              message: "El bot ya está conectado",
+              qrCode: null,
+            },
+          });
+        }
+        const qrData = this.bot.getQRCode();
+        if (!qrData) {
+          return res.json({
+            success: false,
+            error:
+              "No hay QR code disponible. El bot puede estar en proceso de conexión.",
+            data: {
+              connected: false,
+              qrCode: null,
+            },
+          });
+        }
+        res.json({
+          success: true,
+          data: {
+            connected: false,
+            qrCode: qrData,
+            message: "Escanea este QR code con WhatsApp para conectar el bot",
+          },
+        });
+      } catch (error) {
+        this.logger.error("Error obteniendo QR code:", error);
+        res.status(500).json({
+          success: false,
+          error: "Error interno del servidor",
+        });
+      }
+    });
+
+    // Obtener imagen QR
+    this.app.get("/qr-image", async (req, res) => {
+      try {
+        const status = this.bot.getStatus();
+        if (status.isConnected) {
+          return res.status(400).json({
+            success: false,
+            error: "El bot ya está conectado",
+          });
+        }
+        const qrData = this.bot.getQRCode();
+        if (!qrData) {
+          return res.status(404).json({
+            success: false,
+            error: "No hay QR code disponible",
+          });
+        }
+        const qrImageBuffer = await qrcode.toBuffer(qrData, {
+          type: "png",
+          width: 300,
+          margin: 2,
+          color: { dark: "#000000", light: "#FFFFFF" },
+        });
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Length", qrImageBuffer.length);
+        res.send(qrImageBuffer);
+      } catch (error) {
+        this.logger.error("Error generando imagen QR:", error);
+        res.status(500).json({
+          success: false,
+          error: "Error interno del servidor",
+        });
+      }
+    });
+
+    // Regenerar QR code
+    this.app.post("/qr-regenerate", async (req, res) => {
+      try {
+        const status = this.bot.getStatus();
+        if (status.isConnected) {
+          return res.json({
+            success: false,
+            error: "El bot ya está conectado",
+          });
+        }
+        const qrData = await this.bot.regenerateQR();
+        if (!qrData) {
+          return res.json({
+            success: false,
+            error: "No se pudo regenerar el QR code",
+          });
+        }
+        res.json({
+          success: true,
+          data: {
+            connected: false,
+            qrCode: qrData,
+            message: "Nuevo QR code generado. Escanea con WhatsApp.",
+          },
+        });
+      } catch (error) {
+        this.logger.error("Error regenerando QR code:", error);
+        res.status(500).json({
+          success: false,
+          error: "Error interno del servidor",
+        });
+      }
+    });
+
     // Manejo de errores 404
     this.app.use("*", (req, res) => {
       res.status(404).json({
@@ -458,6 +571,9 @@ class WhatsAppServer {
         availableEndpoints: [
           "GET /health",
           "GET /status",
+          "GET /qr",
+          "GET /qr-image",
+          "POST /qr-regenerate",
           "POST /send-message",
           "POST /send-response",
           "POST /send-bulk",
